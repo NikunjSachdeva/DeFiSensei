@@ -1,2 +1,10 @@
-python-telegram-bot
-python-dotenv
+python-telegram-bot==20.3
+python-dotenv==1.0.0
+requests==2.31.0
+yfinance==0.2.41
+pandas==2.2.2
+numpy==2.0.1
+scikit-learn==1.3.0
+pyshorteners==1.0.1
+langchain==0.0.209
+CTransformers==0.2.24

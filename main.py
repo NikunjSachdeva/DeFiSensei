@@ -2,7 +2,7 @@ import os
 import logging
 import requests
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes,MessageHandler,ConversationHandler ,filters
 from dotenv import load_dotenv
 import sqlite3
 import hashlib
@@ -15,7 +15,14 @@ import textwrap
 import pyshorteners
 import random
 import time
-
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error
+from langchain.prompts import PromptTemplate
+from langchain.llms import CTransformers
+import logging
 
 # Connect to database
 conn = sqlite3.connect('users.db')
@@ -61,26 +68,39 @@ Let's get you registered to experience all
 features of the bot.
 Type /register to start registration process.
 Type /help to view available commands.
+PS: info...
                                     """)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         """
-Available commands:
-/register - Register a new account
-/login  - Login to your account
+Available commands with their usage:
+
+Enter the commands without <>
+
+To interact with AI Finance assistant ChatBot simply type the prompt without any slash or command.... 
+
 /start - Welcome message
 /help - List available commands
-/price  - Know the current price of a coin. Eg: /price bitcoin
+/coin <coin name> - Know the current price of a coin. Eg: /price bitcoin
 /market - Get live market updates including top stocks worldwide, top stocks in India, and forex prices.
-/delete - Delete your account.
-/stock - Get live price for a specific stock.
-/forex - Get live price for a specific forex.
-/budget_highlights - Highlights for 2024 India Budget.
+/register <username> <password> <email> - Register a new account
+/login <username> <password> - Login to your account
+/logout - Logout from your account
+/delete <username> <password> <email> - Delete your account
+/forex <from> <to> - Get live price for a specific forex
+/stock <stock symbol (i.e., stockname.BO For Indian stock or stocksymbol for global)> - Get live price for a specific stock
+/budget_highlights - Highlights for 2024 India Budget
+/finance_news - Get the latest finance news
+/recover_username <email> - Recover your username using your email
+/reset_password <email> <new_password> - Reset your account password
+/predict <stock symbol (i.e., stockname.BO For Indian stock or stocksymbol for global)> - Predict investment return using AI
+/search <stockname> - Search for stocks and financial information Eg: /search infosys
         """
     )
 
-async def price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
+async def coin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     telegram_id = update.message.from_user.id
     cursor.execute('SELECT is_logged_in FROM users WHERE telegram_id = ?', (telegram_id,))
     result = cursor.fetchone()
@@ -99,7 +119,7 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             else:
                 await update.message.reply_text("Failed to fetch price data.")
         else:
-            await update.message.reply_text("Usage: /price <coin>")
+            await update.message.reply_text("Usage: /coin <coin name>")
     else:
         await update.message.reply_text("You need to be logged in to use this command. Please log in using /login.")
 
@@ -200,12 +220,12 @@ async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             conn.commit()
             
             # Send confirmation email
-            email_sent = send_delete_mail(username, email)
+            email_sent = send_delete_mail(username, email)  # Ensure send_delete_mail sends the correct email
             
             if email_sent:
                 await update.message.reply_text('Your account has been successfully deleted. A confirmation email has been sent.')
             else:
-                await update.message.reply_text('Failed to send confirmation email. Please try again later.')
+                await update.message.reply_text('Failed to send confirmation email. Please try again later. You may recieve it shortly.')
         else:
             await update.message.reply_text('Invalid credentials. Please check your username, password, and email.')
 
@@ -213,31 +233,33 @@ async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(f'An error occurred: {e}')
 
 # Send Delete email
-def send_delete_mail(username, email):
-    sender_email = os.getenv("SENDER_EMAIL")
-    sender_password = os.getenv("SENDER_PASSWORD")
-    smtp_server = "smtp-mail.outlook.com"
-    smtp_port = 587
-
-    msg = MIMEMultipart()
-    msg['From'] = sender_email
-    msg['To'] = email
-    msg['Subject'] = "Account Deletion Confirmation"
-
-    body = f"Dear {username},\n\nYou have successfully deleted your account from DeFiSensei. Thank you for using our service!"
-    msg.attach(MIMEText(body, 'plain'))
-
+def send_delete_mail(username: str, email: str) -> bool:
     try:
-        server = smtplib.SMTP(smtp_server, smtp_port)
-        server.starttls()
-        server.login(sender_email, sender_password)
-        text = msg.as_string()
-        server.sendmail(sender_email, email, text)
-        server.quit()
-        print("Email sent successfully!")
+        # Email server configuration
+        smtp_server = 'smtp.example.com'
+        smtp_port = 587
+        smtp_username = 'your_email@example.com'
+        smtp_password = 'your_email_password'
+
+        # Create the email content
+        msg = MIMEMultipart()
+        msg['From'] = smtp_username
+        msg['To'] = email
+        msg['Subject'] = 'Account Deletion Confirmation'
+
+        body = f'Dear {username},\n\nYour account has been successfully deleted.\n\nBest regards,\nYour Team'
+        msg.attach(MIMEText(body, 'plain'))
+
+        # Send the email
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.starttls()
+            server.login(smtp_username, smtp_password)
+            server.sendmail(smtp_username, email, msg.as_string())
+
         return True
+
     except Exception as e:
-        print(f"Failed to send email. Error: {str(e)}")
+        print(f'Error sending email: {e}')
         return False
 
 # Send email
@@ -313,7 +335,7 @@ async def stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if result and result[0] == 1:
         if len(context.args) != 1:
-            await update.message.reply_text('Usage: /india_stock <stock symbol (i.e., stockname.BO)>')
+            await update.message.reply_text('Usage: /stock <stock symbol (i.e., stockname.BO For Indian stock or stocksymbol for global)>')
             return
 
         symbol = context.args[0]
@@ -637,9 +659,6 @@ async def verify_otp(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     else:
         await update.message.reply_text('Invalid or expired OTP. Please try again.')
 
-# Recover username
-import sqlite3
-
 async def recover_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if len(context.args) != 1:
         await update.message.reply_text('Usage: /recover_username <email>')
@@ -676,10 +695,6 @@ async def recover_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         # Ensure the database connection is closed
         conn.close()
 
-
-# Reset password
-import sqlite3
-
 async def reset_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if len(context.args) != 2:
         await update.message.reply_text('Usage: /reset_password <email> <new_password>')
@@ -714,16 +729,149 @@ async def reset_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         conn.close()
 
 
+# Download and preprocess data
+def download_and_preprocess_data(ticker):
+    stock_data = yf.download(ticker, start='2020-01-01', end='2023-01-01')
+    stock_data.fillna(method='ffill', inplace=True)
+    stock_data['Return'] = stock_data['Close'].pct_change()
+    stock_data.dropna(inplace=True)
+    features = stock_data[['Open', 'High', 'Low', 'Close', 'Volume']].values
+    labels = stock_data['Return'].values
+    return features, labels
 
+# Train model
+def train_model(features, labels):
+    X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.2, random_state=42)
+    model = LinearRegression()
+    model.fit(X_train, y_train)
+    predictions = model.predict(X_test)
+    mse = mean_squared_error(y_test, predictions)
+    print(f'Mean Squared Error: {mse}')
+    return model
+
+# Predict return
+def predict_return(model, open_price, high_price, low_price, close_price, volume):
+    input_features = np.array([[open_price, high_price, low_price, close_price, volume]])
+    predicted_return = model.predict(input_features)
+    return predicted_return[0]
+
+# Function to get the latest stock prices (example function, to be implemented)
+def get_latest_stock_prices(ticker):
+    stock_data = yf.download(ticker, period='1d')
+    latest_prices = stock_data.iloc[-1][['Open', 'High', 'Low', 'Close', 'Volume']].values
+    return latest_prices
+async def predict(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if len(context.args) != 1:
+        await update.message.reply_text('Usage: /predict <stock symbol (i.e., stockname.BO For Indian stock or stocksymbol for global)>')
+        return
+
+    ticker = context.args[0].upper()
+    latest_prices = get_latest_stock_prices(ticker)
+    predicted_return = predict_return(model, *latest_prices)
+    await update.message.reply_text(f'The predicted return for {ticker} is {predicted_return:.2%}')
+df = pd.read_csv('stocks.csv')
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+# Function to get stock details from yfinance
+def get_stock_details(symbol: str):
+    try:
+        stock = yf.Ticker(symbol)
+        info = stock.info
+        return {
+            'Name': info.get('longName', 'N/A'),
+            'Symbol': info.get('symbol', 'N/A'),
+            'Exchange': info.get('exchange', 'N/A'),
+            'Current Price': info.get('currentPrice', 'N/A'),
+            'Market Cap': info.get('marketCap', 'N/A'),
+            'PE Ratio': info.get('trailingPE', 'N/A'),
+            '52 Week High': info.get('fiftyTwoWeekHigh', 'N/A'),
+            '52 Week Low': info.get('fiftyTwoWeekLow', 'N/A'),
+            'Dividend Yield': info.get('dividendYield', 'N/A'),
+            'Description': info.get('description', 'N/A')
+        }
+    except Exception as e:
+        logger.error(f"Error fetching stock details: {e}")
+        return {}
+
+# Function to handle the /search command
+async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.args:
+        name = ' '.join(context.args).lower()
+        result = df[df['name'].str.lower().str.contains(name)]
+        if not result.empty:
+            stocks = []
+            for _, stock_info in result.iterrows():
+                details = get_stock_details(stock_info['symbol'])
+                stock_details = '\n'.join([f"{key}: {value}" for key, value in details.items()])
+                stocks.append(stock_details)
+            message = "\n\n".join(stocks)
+        else:
+            message = "Stock not found by that name."
+    else:
+        message = "Please provide a stock name after the command."
+    await update.message.reply_text(message)
+
+
+
+
+# Llama Model
+# Initialize the LLaMA 2 model globally
+llm = CTransformers(model='models/llama-2-7b-chat.ggmlv3.q8_0.bin',
+                    model_type='llama',
+                    config={'max_new_tokens': 256,
+                            'temperature': 0.01})
+
+# Function to get response from LLaMA 2 model
+def getLLamaresponse(input_text, blog_style='Common People'):
+    # Prompt Template
+    template = """
+    Write a response in the style of a {blog_style} for the topic "{input_text}".
+    """
+    
+    prompt = PromptTemplate(input_variables=["blog_style", "input_text"],
+                            template=template)
+    
+    # Generate the response from the LLaMA 2 model
+    response = llm(prompt.format(blog_style=blog_style, input_text=input_text))
+    return response
+# Message handler
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_message = update.message.text
+    user_id = update.message.from_user.id
+    telegram_id = update.message.from_user.id
+    try:
+        # Connect to the database
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+
+        # Check if the user is logged in
+        cursor.execute('SELECT is_logged_in FROM users WHERE telegram_id = ?', (telegram_id,))
+        log = cursor.fetchone()
+
+        if log and log[0] == 1:
+            # If logged in, generate a response using the LLaMA model
+            response = getLLamaresponse(user_message)
+            await update.message.reply_text(response)
+        else:
+            await update.message.reply_text('Please log in by using /login.')
+
+    except sqlite3.Error as e:
+        await update.message.reply_text(f'An error occurred while accessing the database: {e}')
+    
+    finally:
+        # Ensure the database connection is closed
+        conn.close()
 
 # Initialize application
 def main():
+    
     application = Application.builder().token(TOKEN).build()
 
     # Add command handlers
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CommandHandler('help', help_command))
-    application.add_handler(CommandHandler('price', price))
+    application.add_handler(CommandHandler('coin', coin))
     application.add_handler(CommandHandler('market', market))
     application.add_handler(CommandHandler('register', register))
     application.add_handler(CommandHandler('login', login))
@@ -737,9 +885,24 @@ def main():
     application.add_handler(CommandHandler('verify_otp', verify_otp))
     application.add_handler(CommandHandler('recover_username', recover_username))
     application.add_handler(CommandHandler('reset_password', reset_password))
+    application.add_handler(CommandHandler('predict', predict))
+    application.add_handler(CommandHandler('search', search))
+
+     # Message handler for text messages
+    message_handler = MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
+    application.add_handler(message_handler)
 
     # Start the bot
     application.run_polling()
 
 if __name__ == '__main__':
+    ticker = 'AAPL'
+    features, labels = download_and_preprocess_data(ticker)
+    model = train_model(features, labels)
+    # Enable logging
+    logging.basicConfig(
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        level=logging.INFO
+    )
+    logger = logging.getLogger(__name__)
     main()
