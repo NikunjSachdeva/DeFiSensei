@@ -1,0 +1,2 @@
+This bot uses llama2 7B-chat ggml model.
+In order to run the script the model should be installed from hugging face.
